@@ -347,9 +347,21 @@ export const authApi = {
   },
 
   forgotPassword: (email: string) =>
-    request<{ message: string }>('/auth/forgot-password', {
+    request<{ email: string }>('/auth/forgot-password', {
       method: 'POST',
       body: JSON.stringify({ email }),
+    }),
+
+  verifyResetToken: (email: string, token: string) =>
+    request<Record<string, unknown>>('/auth/verify-reset-token', {
+      method: 'POST',
+      body: JSON.stringify({ email, token }),
+    }),
+
+  resetPassword: (email: string, token: string, new_password: string) =>
+    request<UserResponse>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, token, new_password }),
     }),
 }
 
