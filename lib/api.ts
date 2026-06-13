@@ -524,6 +524,7 @@ export const adminApi = {
     name: string
     description: string
     mappings: MappingRow[]
+    is_default?: boolean
   }) =>
     request<MappingTemplate>('/admin/mapping-templates', {
       method: 'POST',
@@ -547,6 +548,16 @@ export const adminApi = {
     }),
 
   // Team
+  inviteMember: (data: {
+    name: string
+    email: string
+    role: 'admin' | 'estimator'
+  }) =>
+    request<TeamMember>('/admin/team/invite', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   listTeam: () =>
     request<TeamMember[]>('/admin/team'),
 

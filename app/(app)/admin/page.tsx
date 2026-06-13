@@ -56,6 +56,8 @@ import {
   DoorOpen,
   MoreHorizontal,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -64,7 +66,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { adminApi, ApiClientError } from '@/lib/api'
+import { adminApi } from '@/lib/api'
+import { TemplateFormPanel } from '@/components/admin/template-form-panel'
+import { InviteMemberDialog } from '@/components/admin/invite-member-dialog'
 import type { SymbolCategory, MappingTemplate, TeamMember, ActivityLog, SystemHealth } from '@/lib/api'
 
 const symbolIcons: Record<string, React.ElementType> = {
@@ -91,10 +95,15 @@ export default function AdminPage() {
   // Mapping templates
   const [templates, setTemplates] = useState<MappingTemplate[]>([])
   const [templatesLoading, setTemplatesLoading] = useState(true)
+  const [editingTemplate, setEditingTemplate] = useState<MappingTemplate | null>(null)
+  const [showTemplateForm, setShowTemplateForm] = useState(false)
+  const [templatePage, setTemplatePage] = useState(0)
+  const [templatePageSize] = useState(5)
 
   // Team members
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [teamLoading, setTeamLoading] = useState(true)
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false)
 
   // Activity logs
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([])
@@ -157,12 +166,78 @@ export default function AdminPage() {
     } catch { /* silently fail */ }
   }
 
+  const handleCreateTemplate = () => {
+    setEditingTemplate(null)
+    setShowTemplateForm(true)
+  }
+
+  const handleEditTemplate = (template: MappingTemplate) => {
+    setEditingTemplate(template)
+    setShowTemplateForm(true)
+  }
+
+  const handleDuplicateTemplate = async (template: MappingTemplate) => {
+    try {
+      const created = await adminApi.createTemplate({
+        name: `${template.name} (Copy)`,
+        description: template.description || '',
+        mappings: template.mappings || [],
+        is_default: false,
+      })
+      setTemplates(prev => [...prev, created])
+    } catch (err) {
+      console.error('Duplicate template error:', err)
+    }
+  }
+
+  const handleSetDefaultTemplate = async (template: MappingTemplate) => {
+    try {
+      await adminApi.updateTemplate(template._id, {
+        is_default: true,
+      })
+      // Unset default on all others
+      setTemplates(prev =>
+        prev.map(t => ({
+          ...t,
+          is_default: t._id === template._id,
+        })),
+      )
+    } catch (err) {
+      console.error('Set default error:', err)
+    }
+  }
+
   const handleDeleteTemplate = async (id: string) => {
     try {
       await adminApi.deleteTemplate(id)
       setTemplates(prev => prev.filter(t => t._id !== id))
     } catch { /* silently fail */ }
   }
+
+  const handleTemplateSaved = useCallback(async () => {
+    try {
+      const temps = await adminApi.listTemplates()
+      setTemplates(temps)
+      setShowTemplateForm(false)
+      setEditingTemplate(null)
+    } catch { /* silently fail */ }
+  }, [])
+
+  const handleCancelTemplateForm = useCallback(() => {
+    setShowTemplateForm(false)
+    setEditingTemplate(null)
+  }, [])
+
+  // Pagination
+  const paginatedTemplates = templates.slice(
+    templatePage * templatePageSize,
+    (templatePage + 1) * templatePageSize,
+  )
+  const totalPages = Math.max(1, Math.ceil(templates.length / templatePageSize))
+
+  const handleInviteSuccess = useCallback((member: TeamMember) => {
+    setTeamMembers(prev => [...prev, member])
+  }, [])
 
   const handleRemoveMember = async (userId: string) => {
     try {
@@ -272,48 +347,161 @@ export default function AdminPage() {
 
         {/* Mapping Templates Tab */}
         <TabsContent value="templates" className="space-y-6">
-          <Card className="border-border/50 bg-card/50">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div><CardTitle>Mapping Templates</CardTitle><CardDescription>Pre-configured product mappings for quick setup.</CardDescription></div>
-                <Button><Plus className="mr-2 h-4 w-4" />Create Template</Button>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              {templatesLoading ? (
-                <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-border/50 hover:bg-transparent">
-                      <TableHead>Template Name</TableHead><TableHead>Description</TableHead><TableHead>Created</TableHead><TableHead className="text-center">Default</TableHead><TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {templates.map((template) => (
-                      <TableRow key={template._id} className="border-border/50">
-                        <TableCell className="font-medium">{template.name}</TableCell>
-                        <TableCell className="text-muted-foreground">{template.description}</TableCell>
-                        <TableCell className="text-muted-foreground">{new Date(template.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</TableCell>
-                        <TableCell className="text-center">{template.is_default && <Badge variant="outline" className="border-primary text-primary">Default</Badge>}</TableCell>
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem><Edit3 className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
-                              <DropdownMenuItem><Copy className="mr-2 h-4 w-4" />Duplicate</DropdownMenuItem>
-                              {!template.is_default && <DropdownMenuItem><CheckCircle className="mr-2 h-4 w-4" />Set as Default</DropdownMenuItem>}
-                              <DropdownMenuItem className="text-destructive" onClick={() => handleDeleteTemplate(template._id)}><Trash2 className="mr-2 h-4 w-4" />Delete</DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
+          {showTemplateForm ? (
+            /* Show ONLY the form panel when creating/editing — template list hidden */
+            <TemplateFormPanel
+              template={editingTemplate}
+              onSaved={handleTemplateSaved}
+              onCancel={handleCancelTemplateForm}
+            />
+          ) : (
+            /* Show the list with Create button and pagination */
+            <Card className="border-border/50 bg-card/50">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Mapping Templates</CardTitle>
+                    <CardDescription>
+                      {templates.length > 0
+                        ? `${templates.length} template${templates.length === 1 ? '' : 's'} configured`
+                        : 'Pre-configured product mappings for quick setup.'}
+                    </CardDescription>
+                  </div>
+                  <Button onClick={handleCreateTemplate}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Template
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {templatesLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : templates.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                    <FileText className="mb-3 h-10 w-10 opacity-30" />
+                    <p className="text-sm">No mapping templates yet.</p>
+                    <p className="text-xs">Click "Create Template" to add your first one.</p>
+                  </div>
+                ) : (
+                  <>
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border/50 hover:bg-transparent">
+                          <TableHead>Template Name</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Created</TableHead>
+                          <TableHead className="text-center">Default</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedTemplates.map((template) => (
+                          <TableRow key={template._id} className="border-border/50">
+                            <TableCell className="font-medium">{template.name}</TableCell>
+                            <TableCell className="text-muted-foreground max-w-[280px] truncate">{template.description}</TableCell>
+                            <TableCell className="text-muted-foreground whitespace-nowrap">
+                              {new Date(template.created_at).toLocaleDateString('en-AU', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {template.is_default && (
+                                <Badge variant="outline" className="border-primary text-primary">
+                                  Default
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon">
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onClick={() => handleEditTemplate(template)}>
+                                    <Edit3 className="mr-2 h-4 w-4" />
+                                    Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => handleDuplicateTemplate(template)}>
+                                    <Copy className="mr-2 h-4 w-4" />
+                                    Duplicate
+                                  </DropdownMenuItem>
+                                  {!template.is_default && (
+                                    <DropdownMenuItem onClick={() => handleSetDefaultTemplate(template)}>
+                                      <CheckCircle className="mr-2 h-4 w-4" />
+                                      Set as Default
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuItem
+                                    className="text-destructive"
+                                    onClick={() => handleDeleteTemplate(template._id)}
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div className="flex items-center justify-between border-t border-border/50 px-6 py-3">
+                        <p className="text-sm text-muted-foreground">
+                          Showing {templatePage * templatePageSize + 1}–
+                          {Math.min((templatePage + 1) * templatePageSize, templates.length)} of{' '}
+                          {templates.length}
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            disabled={templatePage === 0}
+                            onClick={() => setTemplatePage((p) => Math.max(0, p - 1))}
+                          >
+                            <span className="sr-only">Previous</span>
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          {Array.from({ length: totalPages }, (_, i) => (
+                            <Button
+                              key={i}
+                              variant={templatePage === i ? 'default' : 'outline'}
+                              size="sm"
+                              className="h-8 w-8 p-0 text-xs"
+                              onClick={() => setTemplatePage(i)}
+                            >
+                              {i + 1}
+                            </Button>
+                          ))}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            disabled={templatePage >= totalPages - 1}
+                            onClick={() =>
+                              setTemplatePage((p) => Math.min(totalPages - 1, p + 1))
+                            }
+                          >
+                            <span className="sr-only">Next</span>
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* Team Tab */}
@@ -322,7 +510,10 @@ export default function AdminPage() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div><CardTitle>Team Members</CardTitle><CardDescription>Manage who has access to your organisation.</CardDescription></div>
-                <Button><Plus className="mr-2 h-4 w-4" />Invite Member</Button>
+                <Button onClick={() => setInviteDialogOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Invite Member
+                </Button>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -469,6 +660,13 @@ export default function AdminPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Invite Member Dialog */}
+      <InviteMemberDialog
+        open={inviteDialogOpen}
+        onOpenChange={setInviteDialogOpen}
+        onSuccess={handleInviteSuccess}
+      />
     </div>
   )
 }
