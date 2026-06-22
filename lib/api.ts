@@ -88,7 +88,7 @@ async function request<T>(
     if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
       window.location.href = '/login'
     }
-    throw new ApiClientError(response.status, 'Session expired. Please log in again.')
+    // throw new ApiClientError(response.status, 'Session expired. Please log in again.')
   }
 
   if (response.status === 204) {
@@ -327,7 +327,7 @@ export const authApi = {
       if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
         window.location.href = '/login'
       }
-      throw new ApiClientError(response.status, 'Session expired. Please log in again.')
+      // throw new ApiClientError(response.status, 'Session expired. Please log in again.')
     }
 
     const json = await response.json()
@@ -472,7 +472,7 @@ export const projectsApi = {
     if (response.status === 401 || response.status === 403) {
       removeToken()
       if (typeof window !== 'undefined') window.location.href = '/login'
-      throw new ApiClientError(response.status, 'Session expired.')
+      // throw new ApiClientError(response.status, 'Session expired.')
     }
 
     const json = await response.json()
