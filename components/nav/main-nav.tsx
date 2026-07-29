@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { LayoutDashboard, Plus, FolderOpen, Settings, User, LogOut, Menu, Layers } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 
 const navItems = [
@@ -25,7 +25,12 @@ const navItems = [
 export function MainNav() {
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const { user, logout } = useAuth()
+  const [isHydrated, setIsHydrated] = useState(false)
+  const { logout } = useAuth()
+
+  useEffect(() => {
+    setIsHydrated(true)
+  }, [])
 
   const handleLogout = () => {
     setMobileOpen(false)
@@ -68,36 +73,48 @@ export function MainNav() {
 
         {/* User Menu */}
         <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="hidden md:flex">
-                <User className="h-5 w-5" />
-                <span className="sr-only">User menu</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem asChild>
-                <Link href="/admin/profile" className="flex items-center gap-2">
-                  <User className="h-4 w-4" />
-                  Profile
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link href="/admin" className="flex items-center gap-2">
-                  <Settings className="h-4 w-4" />
-                  Settings
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={handleLogout}
-                className="flex items-center gap-2 text-destructive cursor-pointer"
-              >
-                <LogOut className="h-4 w-4" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {isHydrated ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="hidden md:flex">
+                  <User className="h-5 w-5" />
+                  <span className="sr-only">User menu</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/profile" className="flex items-center gap-2">
+                    <User className="h-4 w-4" />
+                    Profile
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/admin" className="flex items-center gap-2">
+                    <Settings className="h-4 w-4" />
+                    Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  className="flex cursor-pointer items-center gap-2 text-destructive"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hidden md:flex"
+              aria-label="User menu"
+              disabled
+            >
+              <User className="h-5 w-5" />
+            </Button>
+          )}
 
           {/* Mobile Menu */}
           <Button
