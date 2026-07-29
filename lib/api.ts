@@ -62,12 +62,20 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const token = getToken()
+  const isPublicAuthRequest = [
+    '/auth/login',
+    '/auth/register',
+    '/auth/forgot-password',
+    '/auth/verify-reset-token',
+    '/auth/reset-password',
+  ].includes(endpoint)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   }
 
-  if (token) {
+  // A stale token must not affect login or other public authentication calls.
+  if (token && !isPublicAuthRequest) {
     headers['Authorization'] = `Bearer ${token}`
   }
 
@@ -82,8 +90,10 @@ async function request<T>(
     headers,
   })
 
-  // Handle 401/403 globally — clear token and redirect to login
-  if (response.status === 401 || response.status === 403) {
+  // Only protected requests can represent an expired session. Public auth
+  // requests must continue to the normal error parser so the backend's real
+  // message (for example, "Invalid email or password.") reaches the user.
+  if ((response.status === 401 || response.status === 403) && !isPublicAuthRequest) {
     removeToken()
     if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
       window.location.href = '/login'
@@ -168,6 +178,61 @@ export interface ProjectResponse {
   symbols_count: number
   user_id: string
   file_public_id?: string
+  file_type: 'pdf' | 'image'
+  file_content_type?: string | null
+  image_url?: string | null
+  detection?: ObjectDetectionResult | null
+  dxf?: DxfProjectFile | null
+}
+
+export interface ObjectDetectionResult {
+  status: string
+  total_detections: number
+  object_counts: Record<string, number>
+}
+
+export interface DxfLayer {
+  layer_name: string
+  total_entities: number
+  line_entities: number
+}
+
+export interface DxfLayerAnalysis {
+  layer_count: number
+  layers: DxfLayer[]
+}
+
+export interface DxfMeasurementSummary {
+  layer_name: string
+  segment_count: number
+  total_length_mm: number
+  total_length_m: number
+  measured_at: string
+}
+
+export interface DxfProjectFile {
+  file_name: string
+  file_size: string
+  file_size_bytes: number
+  content_type: string
+  public_id: string
+  secure_url: string
+  status: 'processing' | 'analyzed' | 'failed'
+  error?: string | null
+  uploaded_at: string
+  analyzed_at?: string | null
+  layer_analysis?: DxfLayerAnalysis | null
+  measurements: DxfMeasurementSummary[]
+}
+
+export interface DxfUploadResponse {
+  project_id: string
+  dxf: DxfProjectFile
+}
+
+export interface DxfMeasurementResponse {
+  project_id: string
+  measurement: DxfMeasurementSummary
 }
 
 export interface DetectedSymbol {
@@ -224,11 +289,15 @@ export interface DashboardStats {
 }
 
 export interface UploadResponse {
+  project_id: string
   file_name: string
   file_size: string
   pages: number
   public_id: string
   secure_url: string
+  image_url?: string | null
+  file_type: 'pdf' | 'image'
+  detection?: ObjectDetectionResult | null
 }
 
 export interface ExportData {
@@ -439,7 +508,7 @@ export const projectsApi = {
   saveMappings: (projectId: string, mappings: MappingRow[]) => {
     // Normalize mapping keys for backend (camelCase -> snake_case)
     const normalized = mappings.map(m => ({
-      symbolType: m.symbolType || m.symbol_type,
+      symbol_type: m.symbolType || m.symbol_type,
       product_code: m.productCode || m.product_code || '',
       description: m.description || '',
       unit: m.unit || 'ea',
@@ -452,15 +521,58 @@ export const projectsApi = {
     })
   },
 
+  uploadDxf: async (projectId: string, file: File) => {
+    const token = getToken()
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE_URL}/projects/${projectId}/dxf`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    })
+
+    if (response.status === 401 || response.status === 403) {
+      removeToken()
+      if (typeof window !== 'undefined') window.location.href = '/login'
+      throw new ApiClientError(response.status, 'Session expired. Please log in again.')
+    }
+
+    const json = await response.json()
+    if (!response.ok) {
+      const isWrapped = json && typeof json === 'object' && !Array.isArray(json) && 'message' in json
+      throw new ApiClientError(
+        response.status,
+        isWrapped ? json.message : (json?.detail || 'DXF upload failed'),
+      )
+    }
+
+    if (json && typeof json === 'object' && !Array.isArray(json) && 'status' in json && 'data' in json) {
+      return (json as Record<string, unknown>).data as DxfUploadResponse
+    }
+    return json as DxfUploadResponse
+  },
+
+  measureDxfLayer: (projectId: string, layerName: string) =>
+    request<DxfMeasurementResponse>(
+      `/projects/${projectId}/dxf/measure?layer_name=${encodeURIComponent(layerName)}`,
+      { method: 'POST' },
+    ),
+
   // Export
   export: (projectId: string, mode: 'basic' | 'simpro' = 'simpro') =>
     request<ExportData>(`/projects/${projectId}/export?mode=${mode}`),
 
   // Upload
-  uploadPdf: async (file: File) => {
+  uploadPlan: async (
+    file: File,
+    details: { projectName: string; notes?: string },
+  ) => {
     const token = getToken()
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('project_name', details.projectName)
+    if (details.notes?.trim()) formData.append('notes', details.notes.trim())
 
     const url = `${API_BASE_URL}/projects/upload`
     const response = await fetch(url, {

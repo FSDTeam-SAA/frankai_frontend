@@ -23,7 +23,6 @@ import {
   Shield,
   Loader2,
   CheckCircle,
-  AlertTriangle,
   ArrowRight,
   Save,
   Play,
@@ -31,7 +30,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { projectsApi, ApiClientError } from '@/lib/api'
-import type { UploadResponse } from '@/lib/api'
+import type { ObjectDetectionResult, UploadResponse } from '@/lib/api'
 
 const wizardSteps = [
   { id: 'upload', label: 'Upload', description: 'Add your plans' },
@@ -42,11 +41,23 @@ const wizardSteps = [
 ]
 
 interface UploadedFile {
+  file: File
   name: string
   size: string
   pages: number
   public_id: string
   secure_url: string
+  file_type: 'pdf' | 'image'
+}
+
+const supportedPlanTypes = new Set(['application/pdf', 'image/png', 'image/jpeg'])
+
+function formatFileSize(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatDetectionLabel(value: string) {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
 }
 
 export default function NewTakeoffPage() {
@@ -64,10 +75,10 @@ export default function NewTakeoffPage() {
   
   // Detection state
   const [detectionPhase, setDetectionPhase] = useState(0)
-  const [pagesProcessed, setPagesProcessed] = useState(0)
-  const [totalPages, setTotalPages] = useState(18)
-  const [hasWarnings, setHasWarnings] = useState(false)
+  const [totalPages, setTotalPages] = useState(1)
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null)
+  const [detection, setDetection] = useState<ObjectDetectionResult | null>(null)
+  const [detectionError, setDetectionError] = useState<string | null>(null)
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -83,10 +94,10 @@ export default function NewTakeoffPage() {
     e.preventDefault()
     setIsDragging(false)
     const files = e.dataTransfer.files
-    if (files.length > 0 && files[0].type === 'application/pdf') {
+    if (files.length > 0 && supportedPlanTypes.has(files[0].type)) {
       handleFileUpload(files[0])
     } else {
-      setUploadError('Only PDF files are accepted.')
+      setUploadError('Only PDF, PNG, JPG, and JPEG files are accepted.')
     }
   }, [])
 
@@ -97,41 +108,32 @@ export default function NewTakeoffPage() {
     }
   }
 
-  const handleFileUpload = async (file: File) => {
-    setIsUploading(true)
-    setUploadProgress(0)
+  const handleFileUpload = (file: File) => {
     setUploadError(null)
 
-    // Simulate progress (Cloudinary doesn't report % easily)
-    const progressInterval = setInterval(() => {
-      setUploadProgress(prev => Math.min(prev + 10, 90))
-    }, 200)
-
-    try {
-      const result: UploadResponse = await projectsApi.uploadPdf(file)
-      clearInterval(progressInterval)
-      setUploadProgress(100)
-      
-      setUploadedFile({
-        name: result.file_name,
-        size: result.file_size,
-        pages: result.pages,
-        public_id: result.public_id,
-        secure_url: result.secure_url,
-      })
-      setTotalPages(result.pages)
-      setProjectName(file.name.replace('.pdf', '').replace(/_/g, ' '))
-    } catch (err) {
-      clearInterval(progressInterval)
-      if (err instanceof ApiClientError) {
-        setUploadError(err.detail)
-      } else {
-        setUploadError('Failed to upload file. Please try again.')
-      }
-      setUploadedFile(null)
-    } finally {
-      setIsUploading(false)
+    if (!supportedPlanTypes.has(file.type)) {
+      setUploadError('Only PDF, PNG, JPG, and JPEG files are accepted.')
+      return
     }
+
+    if (file.size > 100 * 1024 * 1024) {
+      setUploadError('The uploaded file must be 100 MB or smaller.')
+      return
+    }
+
+    const fileType = file.type === 'application/pdf' ? 'pdf' : 'image'
+    setUploadProgress(100)
+    setUploadedFile({
+      file,
+      name: file.name,
+      size: formatFileSize(file.size),
+      pages: 1,
+      public_id: '',
+      secure_url: '',
+      file_type: fileType,
+    })
+    setTotalPages(1)
+    setProjectName(file.name.replace(/\.[^.]+$/, '').replace(/_/g, ' '))
   }
 
   const removeFile = () => {
@@ -145,55 +147,49 @@ export default function NewTakeoffPage() {
 
     setCurrentStep(1)
     setDetectionPhase(0)
+    setDetection(null)
+    setDetectionError(null)
 
-    // Create the project in the backend
+    const phaseTimers = [
+      setTimeout(() => setDetectionPhase(1), 700),
+      setTimeout(() => setDetectionPhase(2), 1400),
+    ]
+
     try {
-      const project = await projectsApi.create({
-        name: projectName.trim(),
+      const result: UploadResponse = await projectsApi.uploadPlan(uploadedFile.file, {
+        projectName: projectName.trim(),
         notes: notes || undefined,
-        status: 'processing',
-        pages: uploadedFile.pages,
-        file_size: uploadedFile.size,
-        file_name: uploadedFile.name,
-        mapping_complete: false,
-        file_public_id: uploadedFile.public_id,
       })
-      setCreatedProjectId(project._id)
-    } catch (err) {
-      console.error('Failed to create project:', err)
-    }
+      phaseTimers.forEach(clearTimeout)
 
-    // Phase 1: Uploading
-    setDetectionPhase(0)
-    await new Promise(resolve => setTimeout(resolve, 800))
-    
-    // Phase 2: Rendering pages
-    setDetectionPhase(1)
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    // Phase 3: Detecting symbols
-    setDetectionPhase(2)
-    for (let i = 1; i <= totalPages; i++) {
-      await new Promise(resolve => setTimeout(resolve, 200))
-      setPagesProcessed(i)
+      setUploadedFile(current => current ? {
+        ...current,
+        name: result.file_name,
+        size: result.file_size,
+        pages: result.pages,
+        public_id: result.public_id,
+        secure_url: result.secure_url,
+        file_type: result.file_type,
+      } : current)
+      setCreatedProjectId(result.project_id)
+      setDetection(result.detection || null)
+      setTotalPages(result.pages)
+      setDetectionPhase(3)
+      await new Promise(resolve => setTimeout(resolve, 500))
+      setDetectionPhase(4)
+    } catch (err) {
+      phaseTimers.forEach(clearTimeout)
+      setDetectionError(
+        err instanceof ApiClientError
+          ? err.detail
+          : 'Failed to upload and analyze the plan. Please try again.',
+      )
     }
-    
-    // Add some warnings
-    setHasWarnings(true)
-    
-    // Phase 4: Preparing review
-    setDetectionPhase(3)
-    await new Promise(resolve => setTimeout(resolve, 800))
-    
-    // Complete
-    setDetectionPhase(4)
   }
 
   const goToReview = () => {
     if (createdProjectId) {
       router.push(`/projects/${createdProjectId}?tab=review`)
-    } else {
-      router.push('/projects/proj-001?tab=review') // fallback to mock
     }
   }
 
@@ -227,7 +223,7 @@ export default function NewTakeoffPage() {
             <div className="text-center">
               <h1 className="text-2xl font-bold tracking-tight">Upload Your Plans</h1>
               <p className="mt-2 text-muted-foreground">
-                Upload a PDF of your electrical plans to begin the take-off process.
+                Upload a PDF or plan image to begin the take-off process.
               </p>
             </div>
 
@@ -237,7 +233,7 @@ export default function NewTakeoffPage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf"
+                  accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
                   className="hidden"
                   onChange={handleFileSelect}
                 />
@@ -275,7 +271,7 @@ export default function NewTakeoffPage() {
                         <div>
                           <p className="font-medium">{uploadedFile.name}</p>
                           <p className="text-sm text-muted-foreground">
-                            {uploadedFile.pages} pages, {uploadedFile.size}
+                            {uploadedFile.file_type === 'image' ? 'Image plan' : `${uploadedFile.pages} page PDF`}, {uploadedFile.size}
                           </p>
                         </div>
                       </div>
@@ -318,7 +314,7 @@ export default function NewTakeoffPage() {
                       </div>
                       <div className="text-center">
                         <p className="font-medium">
-                          Drag and drop your PDF here, or{' '}
+                          Drag and drop your PDF or image here, or{' '}
                           <span className="text-primary">browse</span>
                         </p>
                         <p className="mt-1 text-sm text-muted-foreground">
@@ -384,7 +380,7 @@ export default function NewTakeoffPage() {
               <div className="text-sm">
                 <p className="font-medium">Secure processing</p>
                 <p className="text-muted-foreground">
-                  Files are processed securely and deleted automatically after analysis.
+                  Files are processed securely and stored in your protected project workspace.
                 </p>
               </div>
             </div>
@@ -458,11 +454,11 @@ export default function NewTakeoffPage() {
                         >
                           {step.label}
                         </p>
-                        {step.progress && detectionPhase === 2 && (
+                        {step.progress && detectionPhase === 2 && !detectionError && (
                           <div className="mt-2">
-                            <Progress value={(pagesProcessed / totalPages) * 100} className="h-2" />
+                            <Progress value={70} className="h-2" />
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {pagesProcessed}/{totalPages} pages processed
+                              Waiting for the AI detection service...
                             </p>
                           </div>
                         )}
@@ -471,16 +467,19 @@ export default function NewTakeoffPage() {
                   ))}
                 </div>
 
-                {/* Warnings */}
-                {hasWarnings && detectionPhase >= 3 && (
-                  <div className="mt-6 space-y-3">
-                    <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-4">
-                      <AlertTriangle className="mt-0.5 h-5 w-5 text-warning" />
-                      <div className="text-sm">
-                        <p className="font-medium text-warning">12 items require review</p>
-                        <p className="text-muted-foreground">
-                          Some symbols were detected with lower confidence. We recommend reviewing these before export.
-                        </p>
+                {detectionError && (
+                  <div className="mt-6 rounded-lg border border-destructive/40 bg-destructive/10 p-5">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="mt-0.5 h-5 w-5 text-destructive" />
+                      <div className="flex-1">
+                        <p className="font-medium text-destructive">Detection failed</p>
+                        <p className="mt-1 text-sm text-muted-foreground">{detectionError}</p>
+                        <div className="mt-4 flex gap-2">
+                          <Button size="sm" onClick={startDetection}>Try Again</Button>
+                          <Button size="sm" variant="outline" onClick={() => setCurrentStep(0)}>
+                            Back to Upload
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -495,10 +494,22 @@ export default function NewTakeoffPage() {
                     <div className="text-center">
                       <p className="text-lg font-semibold">Detection Complete</p>
                       <p className="text-muted-foreground">
-                        244 symbols detected across {totalPages} pages
+                        {detection
+                          ? `${detection.total_detections} objects detected in ${totalPages} image`
+                          : `PDF uploaded across ${totalPages} page`}
                       </p>
                     </div>
-                    <Button onClick={goToReview} size="lg">
+                    {detection && Object.keys(detection.object_counts).length > 0 && (
+                      <div className="grid w-full max-w-2xl grid-cols-2 gap-2 sm:grid-cols-3">
+                        {Object.entries(detection.object_counts).map(([type, count]) => (
+                          <div key={type} className="rounded-md border border-border/60 bg-background/60 px-3 py-2 text-sm">
+                            <p className="truncate text-muted-foreground">{formatDetectionLabel(type)}</p>
+                            <p className="text-lg font-semibold">{count}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <Button onClick={goToReview} size="lg" disabled={!createdProjectId}>
                       Go to Review
                       <ArrowRight className="ml-2 h-4 w-4" />
                     </Button>
@@ -508,7 +519,7 @@ export default function NewTakeoffPage() {
             </Card>
 
             {/* Run in background option */}
-            {detectionPhase < 4 && (
+            {detectionPhase < 4 && !detectionError && (
               <div className="flex justify-center">
                 <Button variant="ghost" onClick={runInBackground}>
                   <Play className="mr-2 h-4 w-4" />

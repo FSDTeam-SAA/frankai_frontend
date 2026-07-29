@@ -47,6 +47,8 @@ import {
 } from '@/components/ui/dialog'
 import { StatusBadge, ConfidenceBadge, SymbolTypeBadge, PageReferenceBadge } from '@/components/ui/status-badge'
 import { ElectricalPlanView } from '@/components/plan/electrical-plan-view'
+import { AggregateDetectionReview } from '@/components/plan/aggregate-detection-review'
+import { CableMeasurementPanel } from '@/components/plan/cable-measurement-panel'
 import {
   Search,
   ZoomIn,
@@ -152,6 +154,14 @@ const ProjectWorkspace = () => {
     ...s,
     id: s._id || s.id || '',
   }))
+  const aggregateObjectCounts = project?.detection?.object_counts || {}
+  const aggregateDetectionTotal = project?.detection?.total_detections || 0
+  const isAggregateImageProject = Boolean(
+    project?.file_type === 'image' && project.image_url && project.detection,
+  )
+  const displayedDetectionTotal = isAggregateImageProject
+    ? aggregateDetectionTotal
+    : symbols.length
 
   const fetchProject = useCallback(async () => {
     setIsLoading(true)
@@ -159,10 +169,23 @@ const ProjectWorkspace = () => {
     try {
       const data = await projectsApi.getById(projectId)
       setProject(data)
-      setMappings(data.mappings || [])
-      const syms = (data.symbols || []).map(s => ({
+      const aggregateMappings: ApiMappingRow[] = Object.keys(
+        data.detection?.object_counts || {},
+      ).map(type => ({
+        symbolType: type,
+        symbol_type: type,
+        productCode: '',
+        product_code: '',
+        description: type.replace(/[_-]+/g, ' '),
+        unit: 'ea',
+        notes: '',
+        status: 'unmapped',
+      }))
+      setMappings(data.mappings?.length ? data.mappings : aggregateMappings)
+      const syms: LocalDetectedSymbol[] = (data.symbols || []).map(s => ({
         ...s,
         id: s._id || s.id || '',
+        type: s.type as LocalDetectedSymbol['type'],
       }))
       setHistory([syms])
       setHistoryIndex(0)
@@ -182,7 +205,7 @@ const ProjectWorkspace = () => {
   const canRedo = historyIndex < history.length - 1
 
   const lowConfidenceSymbols = symbols.filter(s => s.confidence < confidenceThreshold[0])
-  const symbolCounts = symbols.reduce((acc, s) => {
+  const symbolCounts: Record<string, number> = symbols.reduce((acc, s) => {
     acc[s.type] = (acc[s.type] || 0) + 1
     return acc
   }, {} as Record<string, number>)
@@ -424,9 +447,9 @@ const ProjectWorkspace = () => {
                 <div>
                   <h1 className="text-xl font-bold tracking-tight">{project.name}</h1>
                   <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
-                    <span>{project.pages} pages</span>
+                    <span>{project.file_type === 'image' ? '1 image' : `${project.pages} pages`}</span>
                     <span>|</span>
-                    <span>{symbols.length} symbols</span>
+                    <span>{displayedDetectionTotal} detected</span>
                     <StatusBadge status={project.status} />
                   </div>
                 </div>
@@ -453,6 +476,13 @@ const ProjectWorkspace = () => {
                 <TabsTrigger value="review" className="rounded-none border-b-2 border-transparent px-4 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent">
                   Review & Edit
                 </TabsTrigger>
+                <TabsTrigger value="cable" className="gap-2 rounded-none border-b-2 border-transparent px-4 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent">
+                  <Cable className="h-4 w-4" />
+                  Cable Measurement
+                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-normal">
+                    Optional
+                  </Badge>
+                </TabsTrigger>
                 <TabsTrigger value="mapping" className="rounded-none border-b-2 border-transparent px-4 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent">
                   Mapping
                 </TabsTrigger>
@@ -465,6 +495,13 @@ const ProjectWorkspace = () => {
 
           {/* Review & Edit Tab */}
           <TabsContent value="review" className="mt-0 flex-1">
+            {isAggregateImageProject ? (
+              <AggregateDetectionReview
+                imageUrl={project.image_url || ''}
+                objectCounts={aggregateObjectCounts}
+                totalDetections={aggregateDetectionTotal}
+              />
+            ) : (
             <div className="flex h-[calc(100vh-12rem)]">
               {/* Left Sidebar */}
               <div className="flex w-80 flex-col border-r border-border bg-card/30">
@@ -609,6 +646,18 @@ const ProjectWorkspace = () => {
                 </div>
               </div>
             </div>
+            )}
+          </TabsContent>
+
+          {/* Cable Measurement Tab - frontend design only */}
+          <TabsContent value="cable" className="mt-0">
+            <CableMeasurementPanel
+              projectId={projectId}
+              projectName={project.name}
+              planFileName={project.file_name}
+              imageUrl={project.image_url}
+              initialDxf={project.dxf}
+            />
           </TabsContent>
 
           {/* Mapping Tab */}
@@ -621,8 +670,14 @@ const ProjectWorkspace = () => {
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-1.5">
-                    <span className="text-sm text-muted-foreground">Detection confidence:</span>
-                    <span className="font-semibold">{Math.round(symbols.reduce((acc, s) => acc + s.confidence, 0) / (symbols.length || 1))}%</span>
+                    <span className="text-sm text-muted-foreground">
+                      {isAggregateImageProject ? 'Detected objects:' : 'Detection confidence:'}
+                    </span>
+                    <span className="font-semibold">
+                      {isAggregateImageProject
+                        ? aggregateDetectionTotal
+                        : `${Math.round(symbols.reduce((acc, s) => acc + s.confidence, 0) / (symbols.length || 1))}%`}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-1.5">
                     <span className="text-sm text-muted-foreground">Mapping complete:</span>
@@ -707,7 +762,17 @@ const ProjectWorkspace = () => {
                 <h2 className="text-xl font-bold">Export Take-off</h2>
                 <p className="text-sm text-muted-foreground">Download your take-off data in CSV format.</p>
               </div>
-              {lowConfidenceSymbols.length > 0 ? (
+              {isAggregateImageProject ? (
+                <div className="mb-6 flex items-center gap-3 rounded-lg border border-success/30 bg-success/10 p-4">
+                  <CheckCircle className="h-5 w-5 text-success" />
+                  <div className="flex-1">
+                    <p className="font-medium">Aggregate detection ready</p>
+                    <p className="text-sm text-muted-foreground">
+                      {aggregateDetectionTotal} objects across {Object.keys(aggregateObjectCounts).length} categories are ready to export.
+                    </p>
+                  </div>
+                </div>
+              ) : lowConfidenceSymbols.length > 0 ? (
                 <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
                   <Eye className="mt-0.5 h-5 w-5 text-amber-400" />
                   <div className="flex-1">
